@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
-# --- CONFIGURACIÓN DE GOOGLE (La que te funcionaba) ---
+# --- CONFIGURACIÓN DE GOOGLE ---
 CLIENT_CONFIG = {
     "web": {
         "client_id": st.secrets["google_auth"]["client_id"],
@@ -41,10 +41,9 @@ col_config, col_vista = st.columns([1, 1])
 with col_config:
     st.subheader("1. Configurar Ciclo")
     fecha_inicio = st.date_input("¿Qué día empieza el ciclo?", datetime.now())
-    dias_a_generar = st.number_input("¿Cuántos días querés generar?", value=30)
+    dias_a_generar = st.number_input("¿Cuántos días querés generar?", value=30, min_value=1)
     
-    st.write("Definí tu rotación (ejemplo: MM TT FF):")
-    # Creamos una lista de turnos para el ciclo
+    st.write("Definí tu rotación (ejemplo: MMTTFF):")
     patron = st.text_input("Patrón de rotación (M=Mañana, T=Tarde, N=Noche, F=Franco)", "MMTTFF")
     patron = patron.upper().replace(" ", "")
 
@@ -54,33 +53,35 @@ with col_config:
     h_t = st.text_input("Horario Tarde (T)", "15:00-23:00")
     h_n = st.text_input("Horario Noche (N)", "23:00-07:00")
 
-if st.button("⚡ Generar Vista Previa de la Rotación"):
+if st.button("⚡ Generar Vista Previa"):
     agenda_temporal = []
     total_horas = 0
     
     for i in range(dias_a_generar):
         fecha_actual = fecha_inicio + timedelta(days=i)
-        # El truco: usamos el operador 'módulo' para repetir el patrón infinitamente
         letra_turno = patron[i % len(patron)]
         
-        if letra_turno != 'F': # Si no es franco
+        if letra_turno != 'F': 
             if letra_turno == 'M': horario = h_m
             elif letra_turno == 'T': horario = h_t
             elif letra_turno == 'N': horario = h_n
-            else: horario = "08:00-16:00" # Por defecto
+            else: horario = "08:00-16:00"
             
-            inicio, fin = horario.split("-")
-            # Calculamos horas (ejemplo simple 8hs)
-            hs = 8 if letra_turno != 'F' else 0 
-            
-            agenda_temporal.append({
-                "Fecha": fecha_actual.strftime("%Y-%m-%d"),
-                "Turno": f"Turno {letra_turno}",
-                "Inicio": inicio,
-                "Fin": fin,
-                "Horas": hs
-            })
-            total_horas += hs
+            try:
+                inicio, fin = horario.split("-")
+                hs = 8 # Valor base por turno
+                
+                agenda_temporal.append({
+                    "Fecha": fecha_actual.strftime("%Y-%m-%d"),
+                    "Turno": f"Turno {letra_turno}",
+                    "Inicio": inicio,
+                    "Fin": fin,
+                    "Horas": hs
+                })
+                total_horas += hs
+            except:
+                st.error(f"Error en el formato de horario del turno {letra_turno}. Usá 'HH:MM-HH:MM'")
+                st.stop()
     
     st.session_state.proxima_subida = agenda_temporal
     st.session_state.total_h = total_horas
@@ -95,11 +96,21 @@ if 'proxima_subida' in st.session_state:
         
         if st.button("🚀 SUBIR TODO A GOOGLE CALENDAR"):
             with st.spinner("Sincronizando..."):
-                for evento in st.session_state.proxima_subida:
-                    body = {
-                        'summary': evento['Turno'],
-                        'start': {'dateTime': f"{evento['Fecha']}T{evento['Inicio']}:00", 'timeZone': 'America/Argentina/Catamarca'},
-                        'end': {'dateTime': f"{evento['Fecha']}T{evento['Fin']}:00', 'timeZone': 'America/Argentina/Catamarca'},
-                    }
-                    service.events().insert(calendarId='primary', body=body).execute()
-                st.success("¡Rotación cargada con éxito!")
+                try:
+                    for evento in st.session_state.proxima_subida:
+                        body = {
+                            'summary': evento['Turno'],
+                            'start': {
+                                'dateTime': f"{evento['Fecha']}T{evento['Inicio']}:00", 
+                                'timeZone': 'America/Argentina/Catamarca'
+                            },
+                            'end': {
+                                'dateTime': f"{evento['Fecha']}T{evento['Fin']}:00", 
+                                'timeZone': 'America/Argentina/Catamarca'
+                            },
+                        }
+                        service.events().insert(calendarId='primary', body=body).execute()
+                    st.success("¡Rotación cargada con éxito!")
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Error al subir: {e}")
