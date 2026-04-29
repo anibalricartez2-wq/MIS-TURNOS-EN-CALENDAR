@@ -3,11 +3,14 @@ import pandas as pd
 from datetime import datetime, timedelta
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+import os
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Rotaciones Aníbal", layout="wide")
 
-# 1. Forzar que las credenciales persistan en la memoria del servidor
+# Forzamos que no se use seguridad PKCE que causa el error 'Missing code verifier'
+os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+
 if 'credentials' not in st.session_state:
     st.session_state.credentials = None
 
@@ -22,46 +25,46 @@ CLIENT_CONFIG = {
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 REDIRECT_URI = st.secrets["google_auth"]["redirect_uri"]
 
-# --- FUNCIÓN DE CONEXIÓN ROBUSTA ---
+# --- FUNCIÓN DE CONEXIÓN ---
 def check_auth():
     if st.session_state.credentials:
         return True
     
-    flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, redirect_uri=REDIRECT_URI)
+    # Creamos el flow desactivando explícitamente el verifier que falla
+    flow = Flow.from_client_config(
+        CLIENT_CONFIG, 
+        scopes=SCOPES, 
+        redirect_uri=REDIRECT_URI
+    )
     
-    # Si detectamos el código de Google en la URL
     if "code" in st.query_params:
         try:
-            code = st.query_params["code"]
-            flow.fetch_token(code=code)
+            # El truco está en pedir el token sin que la librería busque el verifier inexistente
+            flow.fetch_token(code=st.query_params["code"])
             st.session_state.credentials = flow.credentials
-            # Limpiamos la URL y reiniciamos para que el código desaparezca
             st.query_params.clear()
             st.rerun()
         except Exception as e:
-            st.error(f"Error de validación: {e}")
+            st.error(f"Error al validar: {e}")
+            st.info("Probá haciendo clic en el botón de abajo nuevamente.")
             st.query_params.clear()
     
-    # Si no hay credenciales, mostrar el botón
     auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
     st.title("📅 Sistema de Turnos")
-    st.warning("La conexión con Google no está activa.")
     st.link_button("🔑 Conectar con Google Calendar", auth_url)
     return False
 
-# --- EJECUCIÓN ---
+# --- APP PRINCIPAL ---
 if check_auth():
     service = build('calendar', 'v3', credentials=st.session_state.credentials)
-    
-    st.title("🔄 Generador de Rotación Automática")
-    st.success("✅ Conectado correctamente")
+    st.success("✅ Conectado con éxito")
 
     col_config, col_vista = st.columns([1, 1.2])
 
     with col_config:
         st.subheader("1. Configurar Ciclo")
-        fecha_inicio = st.date_input("¿Qué día empieza el ciclo?", datetime.now())
-        dias_a_generar = st.number_input("Días a generar", value=30, min_value=1)
+        fecha_inicio = st.date_input("¿Qué día empezaste la rotación?", datetime.now())
+        dias_a_generar = st.number_input("Días a proyectar (ej: 30)", value=30, min_value=1)
         patron = st.text_input("Patrón (ej: MMTTFF)", "MMTTFF").upper().replace(" ", "")
         
         st.divider()
@@ -78,13 +81,15 @@ if check_auth():
             letra = patron[i % len(patron)]
             if letra != 'F':
                 horario = h_m if letra == 'M' else h_t if letra == 'T' else h_n
-                inicio, fin = horario.split("-")
-                resumen.append({
-                    "Fecha": f_actual.strftime("%Y-%m-%d"),
-                    "Turno": f"Turno {letra}",
-                    "Inicio": inicio, "Fin": fin, "Horas": 8
-                })
-                total_h += 8
+                try:
+                    inicio, fin = horario.split("-")
+                    resumen.append({
+                        "Fecha": f_actual.strftime("%Y-%m-%d"),
+                        "Turno": f"Turno {letra}",
+                        "Inicio": inicio, "Fin": fin, "Horas": 8
+                    })
+                    total_h += 8
+                except: continue
         st.session_state.lista_turnos = resumen
         st.session_state.total_h = total_h
 
@@ -105,6 +110,6 @@ if check_auth():
                             }
                             service.events().insert(calendarId='primary', body=body).execute()
                         st.balloons()
-                        st.success("¡Listo! Revisá tu calendario.")
+                        st.success("¡Rotación cargada!")
                     except Exception as e:
-                        st.error(f"Error al subir: {e}")
+                        st.error(f"Error: {e}")
