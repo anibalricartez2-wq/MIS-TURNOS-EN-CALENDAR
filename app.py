@@ -8,6 +8,8 @@ st.set_page_config(page_title="Rotaciones Aníbal", layout="wide")
 
 if 'access_token' not in st.session_state:
     st.session_state.access_token = None
+if 'agenda_generada' not in st.session_state:
+    st.session_state.agenda_generada = None
 
 CLIENT_ID = st.secrets["google_auth"]["client_id"]
 CLIENT_SECRET = st.secrets["google_auth"]["client_secret"]
@@ -31,7 +33,7 @@ def exchange_code_for_token(code):
     }
     return requests.post(token_url, data=data).json()
 
-# --- LÓGICA DE LOGIN ---
+# --- LOGUEO ---
 if st.session_state.access_token is None:
     if "code" in st.query_params:
         res = exchange_code_for_token(st.query_params["code"])
@@ -43,79 +45,73 @@ if st.session_state.access_token is None:
     st.link_button("🔑 Conectar con Google Calendar", get_auth_url())
     st.stop()
 
-# --- INTERFAZ DE ROTACIÓN ---
+# --- INTERFAZ ---
 st.title("🔄 Generador de Rotaciones Personalizadas")
-st.success("✅ Conectado a Google Calendar")
+st.success("✅ Conectado")
 
 col1, col2 = st.columns([1, 1.2])
 
 with col1:
-    st.subheader("1. Configurar Patrón")
-    fecha_inicio = st.date_input("¿Qué día inicia el ciclo?", datetime.now())
+    st.subheader("1. Configurar Ciclo")
+    # Usamos una clave única para que Streamlit no lo resetee al hoy
+    fecha_inicio = st.date_input("¿Qué día inicia la rotación?", value=datetime.now(), key="fecha_fija")
     dias_a_proyectar = st.number_input("¿Cuántos días generar?", value=30, min_value=1)
     
-    # Ejemplo: MMMMFFFF (4 mañanas, 4 francos)
-    patron_input = st.text_input("Definí tu rotación (M, T, N, V, F)", "MMTTFF")
+    patron_input = st.text_input("Patrón (ej: MMTTFF)", "MMTTFF")
     patron = patron_input.upper().replace(" ", "").replace(",", "")
-    
-    st.info(f"Ciclo detectado: {'-'.join(patron)}")
 
-    st.subheader("2. Definir Horarios")
+    st.subheader("2. Horarios")
     h_m = st.text_input("Mañana (M)", "07:00-15:00")
     h_t = st.text_input("Tarde (T)", "15:00-23:00")
     h_n = st.text_input("Noche (N)", "23:00-07:00")
 
-if st.button("⚡ Generar Rotación"):
-    lista_final = []
-    total_horas = 0
-    
-    for i in range(dias_a_proyectar):
-        fecha_actual = fecha_inicio + timedelta(days=i)
-        letra = patron[i % len(patron)]
+    if st.button("⚡ Generar Vista Previa", type="secondary", use_container_width=True):
+        lista_final = []
+        total_horas = 0
         
-        info_dia = {
-            "Fecha": fecha_actual.strftime("%Y-%m-%d"),
-            "Turno": "Franco" if letra == 'F' else "Vacaciones" if letra == 'V' else f"Turno {letra}",
-            "Horario": "---",
-            "Hs": 0,
-            "Subir": False
-        }
+        for i in range(dias_a_proyectar):
+            # Calculamos la fecha sumando días a la FECHA DE INICIO elegida
+            fecha_actual = fecha_inicio + timedelta(days=i)
+            letra = patron[i % len(patron)]
+            
+            info_dia = {
+                "Fecha": fecha_actual.strftime("%Y-%m-%d"),
+                "Día": fecha_actual.strftime("%d/%m"),
+                "Turno": "Franco" if letra == 'F' else "Vacaciones" if letra == 'V' else f"Turno {letra}",
+                "Horario": "---",
+                "Subir": False
+            }
 
-        if letra in ['M', 'T', 'N']:
-            horario = h_m if letra == 'M' else h_t if letra == 'T' else h_n
-            info_dia["Horario"] = horario
-            info_dia["Subir"] = True
-            info_dia["Hs"] = 8 
-            total_horas += 8
-        elif letra == 'V':
-            info_dia["Horario"] = "Todo el día"
-            info_dia["Subir"] = True
-            info_dia["Hs"] = 0
+            if letra in ['M', 'T', 'N']:
+                horario = h_m if letra == 'M' else h_t if letra == 'T' else h_n
+                info_dia["Horario"] = horario
+                info_dia["Subir"] = True
+                total_horas += 8
+            elif letra == 'V':
+                info_dia["Horario"] = "Todo el día"
+                info_dia["Subir"] = True
 
-        lista_final.append(info_dia)
-    
-    st.session_state.agenda_generada = lista_final
-    st.session_state.total_h = total_horas
+            lista_final.append(info_dia)
+        
+        st.session_state.agenda_generada = lista_final
+        st.session_state.total_h = total_horas
 
 # --- VISTA PREVIA Y SUBIDA ---
-if 'agenda_generada' in st.session_state:
+if st.session_state.agenda_generada:
     with col2:
         st.subheader("3. Vista Previa")
         df = pd.DataFrame(st.session_state.agenda_generada)
         
-        # Función de colores actualizada para evitar el AttributeError
         def color_turnos(val):
-            if 'Turno M' in str(val): return 'background-color: #e1f5fe'
-            if 'Turno T' in str(val): return 'background-color: #fff9c4'
-            if 'Turno N' in str(val): return 'background-color: #ffe0b2'
-            if 'Franco' in str(val): return 'background-color: #f5f5f5'
-            if 'Vacaciones' in str(val): return 'background-color: #c8e6c9'
+            if 'Turno M' in str(val): return 'background-color: #e3f2fd'
+            if 'Turno T' in str(val): return 'background-color: #fffde7'
+            if 'Turno N' in str(val): return 'background-color: #fff3e0'
+            if 'Franco' in str(val): return 'background-color: #fafafa; color: #9e9e9e'
+            if 'Vacaciones' in str(val): return 'background-color: #e8f5e9'
             return ''
 
-        # Aquí usamos .map() en lugar de .applymap()
-        st.dataframe(df.style.map(color_turnos, subset=['Turno']), use_container_width=True)
-        
-        st.metric("Total Horas Estimadas", f"{st.session_state.total_h} hs")
+        st.dataframe(df.drop(columns=['Subir']).style.map(color_turnos, subset=['Turno']), use_container_width=True, height=450)
+        st.metric("Total Horas", f"{st.session_state.total_h} hs")
 
         if st.button("🚀 SUBIR A GOOGLE CALENDAR", type="primary", use_container_width=True):
             headers = {"Authorization": f"Bearer {st.session_state.access_token}"}
@@ -123,7 +119,7 @@ if 'agenda_generada' in st.session_state:
             with st.spinner("Subiendo..."):
                 for dia in st.session_state.agenda_generada:
                     if dia["Subir"]:
-                        if dia["Turno"] == "Vacaciones":
+                        if "Vacaciones" in dia["Turno"]:
                             body = {
                                 "summary": "🌴 VACACIONES",
                                 "start": {"date": dia["Fecha"]},
@@ -142,4 +138,4 @@ if 'agenda_generada' in st.session_state:
                         if r.status_code == 200: exitos += 1
                 
                 st.balloons()
-                st.success(f"¡Listo! Se cargaron {exitos} eventos.")
+                st.success(f"¡Listo! Se cargaron {exitos} eventos en tu calendario.")
