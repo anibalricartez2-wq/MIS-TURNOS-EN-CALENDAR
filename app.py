@@ -18,14 +18,14 @@ REDIRECT_URI = st.secrets["google_auth"]["redirect_uri"]
 
 st.set_page_config(page_title="Planificador de Turnos Pro", layout="wide")
 
-# --- FUNCIONES DE CACHÉ PARA EVITAR ERRORES DE TOKEN ---
+# --- FUNCIONES DE CACHÉ ---
 @st.cache_resource
 def get_flow():
     return Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, redirect_uri=REDIRECT_URI)
 
 # --- INICIALIZACIÓN DEL ESTADO ---
 if 'agenda' not in st.session_state:
-    st.session_state.agenda = {} # Almacena { "YYYY-MM-DD": "Nombre del Turno" }
+    st.session_state.agenda = {}
 
 # --- FLUJO DE AUTENTICACIÓN ---
 if 'credentials' not in st.session_state:
@@ -42,105 +42,93 @@ if 'credentials' not in st.session_state:
             st.session_state.credentials = flow.credentials
             st.rerun()
         except:
-            st.error("Hubo un error al conectar. Por favor, reintentá.")
+            st.error("Hubo un error al conectar.")
             if st.button("Reintentar"):
                 st.cache_resource.clear()
                 st.rerun()
             st.stop()
 
-# --- INTERFAZ PRINCIPAL (USUARIO CONECTADO) ---
+# --- INTERFAZ PRINCIPAL ---
 service = build('calendar', 'v3', credentials=st.session_state.credentials)
 
 st.title("🛠️ Gestión de Turnos y Rotaciones")
 
-# SIDEBAR: CONFIGURACIÓN PERSONALIZADA DE TURNOS
+# SIDEBAR: CONFIGURACIÓN DE TURNOS
 st.sidebar.header("1. Tus Variantes de Turno")
-st.sidebar.write("Definí tus horarios aquí:")
-
 if 'df_turnos' not in st.session_state:
     st.session_state.df_turnos = pd.DataFrame([
         {"Turno": "Mañana", "Inicio": "07:00", "Fin": "15:00", "Horas": 8},
-        {"Turno": "Tarde", "Inicio": "19:00", "Fin": "23:00", "Horas": 4}
+        {"Turno": "Tarde", "Inicio": "19:00", "Fin": "23:00", "Horas": 4},
+        {"Turno": "Guardia", "Inicio": "08:00", "Fin": "20:00", "Horas": 12}
     ])
 
 turnos_config = st.sidebar.data_editor(st.session_state.df_turnos, num_rows="dynamic")
 
-# CUERPO CENTRAL: ASIGNACIÓN POR BLOQUES
 col_izq, col_der = st.columns([1, 1.2])
 
 with col_izq:
-    st.subheader("2. Asignar Días")
+    st.subheader("2. Selección de Días")
+    st.info("Hacé clic en todos los días que quieras asignar (ej: 2, 4, 7, 8).")
     
-    # Selección de rango de fechas
-    rango_fechas = st.date_input(
-        "Seleccioná un día o un bloque (hacé clic en el inicio y fin)",
-        value=[],
-        help="Si seleccionás dos fechas, se completarán todos los días intermedios."
+    # NUEVO: Selección múltiple de fechas
+    fechas_seleccionadas = st.date_input(
+        "Seleccioná los días en el calendario:",
+        value=[], # Lista vacía permite seleccionar varios
+        help="Podés marcar días salteados haciendo clic en cada uno."
     )
     
     tipo_turno = st.selectbox("Asignar el turno:", turnos_config["Turno"])
     
-    if st.button("➕ Aplicar al Calendario"):
-        if isinstance(rango_fechas, list) or isinstance(rango_fechas, tuple):
-            if len(rango_fechas) == 2:
-                # Es un rango (bloque)
-                inicio, fin = rango_fechas
-                actual = inicio
-                while actual <= fin:
-                    st.session_state.agenda[actual.strftime("%Y-%m-%d")] = tipo_turno
-                    actual += timedelta(days=1)
-                st.success(f"Bloque asignado con éxito.")
-            elif len(rango_fechas) == 1:
-                # Es un solo día
-                st.session_state.agenda[rango_fechas[0].strftime("%Y-%m-%d")] = tipo_turno
-                st.success(f"Día individual asignado.")
+    if st.button("➕ Aplicar Turno a Selección"):
+        if fechas_seleccionadas and isinstance(fechas_seleccionadas, list):
+            for fecha in fechas_seleccionadas:
+                st.session_state.agenda[fecha.strftime("%Y-%m-%d")] = tipo_turno
+            st.success(f"Asignado '{tipo_turno}' a {len(fechas_seleccionadas)} días.")
             st.rerun()
         else:
-            st.warning("Seleccioná al menos una fecha.")
+            st.warning("Seleccioná al menos un día (hacé clic en el calendario).")
 
 with col_der:
     st.subheader("3. Vista Previa y Carga Horaria")
     
     if st.session_state.agenda:
-        # Armar tabla de resumen
         lista_final = []
         for fecha_str, nombre_t in st.session_state.agenda.items():
-            # Buscar datos del turno
-            datos_t = turnos_config[turnos_config["Turno"] == nombre_t].iloc[0]
-            lista_final.append({
-                "Fecha": fecha_str,
-                "Turno": nombre_t,
-                "Horas": datos_t["Horas"]
-            })
+            try:
+                datos_t = turnos_config[turnos_config["Turno"] == nombre_t].iloc[0]
+                lista_final.append({
+                    "Fecha": fecha_str,
+                    "Turno": nombre_t,
+                    "Horas": datos_t["Horas"]
+                })
+            except:
+                continue
         
         df_resumen = pd.DataFrame(lista_final).sort_values("Fecha")
         st.dataframe(df_resumen, use_container_width=True, hide_index=True)
         
-        # Lógica de las 130 horas
         total_h = df_resumen["Horas"].sum()
         st.metric("Total Horas Acumuladas", f"{total_h} hs", delta=f"{130 - total_h} restantes")
         
         if total_h > 130:
-            st.error(f"⚠️ ¡Atención! Estás superando el límite de 130 horas por {total_h - 130} hs.")
+            st.error(f"⚠️ ¡Atención! Superaste el límite por {total_h - 130} hs.")
             
-        if st.button("🗑️ Limpiar Planificación"):
+        if st.button("🗑️ Limpiar Todo"):
             st.session_state.agenda = {}
             st.rerun()
     else:
-        st.info("No hay turnos asignados todavía.")
+        st.info("No hay turnos asignados.")
 
-# --- SECCIÓN DE SINCRONIZACIÓN ---
+# --- SINCRONIZACIÓN ---
 st.divider()
 if st.button("🚀 SUBIR A GOOGLE CALENDAR", type="primary", use_container_width=True):
     if not st.session_state.agenda:
         st.error("No hay nada para sincronizar.")
     else:
-        with st.spinner("Sincronizando con Google..."):
+        with st.spinner("Subiendo eventos..."):
             try:
                 for f_str, t_nombre in st.session_state.agenda.items():
-                    # Obtener horas específicas del turno
                     info_t = turnos_config[turnos_config["Turno"] == t_nombre].iloc[0]
-                    
                     event = {
                         'summary': f'Turno: {t_nombre}',
                         'start': {
@@ -153,12 +141,11 @@ if st.button("🚀 SUBIR A GOOGLE CALENDAR", type="primary", use_container_width
                         },
                     }
                     service.events().insert(calendarId='primary', body=event).execute()
-                
                 st.balloons()
-                st.success("¡Sincronización completada! Revisá tu Google Calendar.")
-                st.session_state.agenda = {} # Opcional: limpiar después de subir
+                st.success("¡Calendario actualizado!")
+                st.session_state.agenda = {} 
             except Exception as e:
-                st.error(f"Error al subir: {e}")
+                st.error(f"Error: {e}")
 
 if st.sidebar.button("Cerrar Sesión"):
     st.cache_resource.clear()
